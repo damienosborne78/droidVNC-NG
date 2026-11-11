@@ -468,6 +468,14 @@ public class InputService extends AccessibilityService {
 			return;
 		}
 
+		// Snapshot + null-guard: native worker thread can race AccessibilityService
+		// (re)bind/null during which `instance` is null; bail rather than NPE so a
+		// re-bind never wedges the input-connection / soft-keyboard path.
+		final InputService svc = instance;
+		if (svc == null) {
+			return;
+		}
+
 		try {
 			InputContext inputContext = inputContexts.get(client);
 
@@ -486,7 +494,7 @@ public class InputService extends AccessibilityService {
 				// showing pointers is enabled
 				int pointerX = x;
 				int pointerY = y;
-				MagnificationState magnification = instance.mMagnification;
+				MagnificationState magnification = svc.mMagnification;
 				if (magnification.scale > 1.0f && inputContext.getDisplayId() == Display.DEFAULT_DISPLAY) {
 					// x and y are positions on the magnified screen, but the overlay is placed in
 					// unscaled coordinates and only then magnified along with everything else, so
@@ -643,6 +651,13 @@ public class InputService extends AccessibilityService {
 	public static void onKeyEvent(int down, long keysym, long client) {
 
 		if(!isInputEnabled) {
+			return;
+		}
+
+		// Null-guard: native worker thread can race AccessibilityService (re)bind/null
+		// during which `instance` is null; bail rather than NPE so a re-bind never
+		// wedges the input-connection / soft-keyboard path.
+		if (instance == null) {
 			return;
 		}
 
@@ -1189,27 +1204,29 @@ public class InputService extends AccessibilityService {
     @WorkerThread
 	@Keep
 	public static void onCutText(String text, long client) {
-
-		if(!isInputEnabled) {
+		if (!isInputEnabled) {
 			return;
 		}
-
-        if (BuildConfig.DEBUG) {
-            Log.d(TAG, "onCutText: text '" + text + "' by client " + client);
-        }
-
+		// Snapshot + null-guard: called from the native VNC worker thread, can race
+		// Android (re)creating/removing the AccessibilityService during which the
+		// static `instance` is null. Bail cleanly so a re-bind never wedges the
+		// input-connection / soft-keyboard path (GrapheneOS keyboard-wedge fix).
+		final InputService svc = instance;
+		if (svc == null) {
+			return;
+		}
+		if (BuildConfig.DEBUG) {
+			Log.d(TAG, "onCutText: text '" + text + "' by client " + client);
+		}
 		try {
-			instance.mMainHandler.post(() -> {
-						try {
-							((ClipboardManager) instance.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText(text, text));
-						} catch (Exception e) {
-							// some other error on main thread
-							Log.e(TAG, "onCutText: failed: " + e);
-						}
-					}
-			);
+			svc.mMainHandler.post(() -> {
+				try {
+					((ClipboardManager) svc.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText(text, text));
+				} catch (Exception e) {
+					Log.e(TAG, "onCutText: failed: " + e);
+				}
+			});
 		} catch (Exception e) {
-			// instance probably null
 			Log.e(TAG, "onCutText: failed: " + e);
 		}
 	}
